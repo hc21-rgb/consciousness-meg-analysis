@@ -28,4 +28,4 @@ MEG, EEG, and EOG data, subjective reports, and associated metadata will be made
 Structural MRI data will be shared upon reasonable request, in accordance with personal data protection regulations.
 
 For questions or inquiries, please contact the corresponding author:
-Dr. Chihiro Hiramatsu, at: hiramatsu.chihiro.025@m.kyushu-u.ac.jp
+Dr. Chihiro Hiramatsu, at: hiramatsu.chihiro.025[at]m.kyushu-u.ac.jp
