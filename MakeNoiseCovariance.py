@@ -25,7 +25,7 @@ subject = 11
 
 ###########################################
 
-file_path = "/Users/Data/Metadata.xlsx"
+file_path = "/Users/Data/Dream/Metadata.xlsx"
 
 df = pd.read_excel(file_path)
 exp_days = sorted(map(int, df[df['Participant ID'] == subject]['Exp Day'].dropna().unique()))
