@@ -15,7 +15,7 @@ import mne
 # participant ID
 subject = "Dream11"
 
-nifti_file = "/Users/Data/MRI/Dream11/Dream11/DICOM_T1w.nii.gz"
+nifti_file = "/Users/Data/Dream/MRI/Dream11/Dream11/DICOM_T1w.nii.gz"
 
 #####################################
 
