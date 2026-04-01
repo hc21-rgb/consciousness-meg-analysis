@@ -30,11 +30,3 @@ Structural MRI data will be shared upon reasonable request, in accordance with p
 
 For questions or inquiries, please contact the corresponding author:
 Dr. Chihiro Hiramatsu, at: hiramatsu.chihiro.025[at]m.kyushu-u.ac.jp
-
-MEG, EEG, and EOG data, subjective reports, and associated metadata will be made publicly available as part of the DREAM database
-(https://doi.org/10.6084/m9.figshare.27116590
-) upon completion of the research associated with this study.
-Structural MRI data will be shared upon reasonable request, in accordance with personal data protection regulations.
-
-For questions or inquiries, please contact the corresponding author:
-Dr. Chihiro Hiramatsu, at: hiramatsu.chihiro.025[at]m.kyushu-u.ac.jp
