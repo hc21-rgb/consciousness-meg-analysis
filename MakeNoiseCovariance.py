@@ -1,6 +1,10 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Make noise covariance
+This script is based on the MNE tutorials:
+https://mne.tools/stable/auto_tutorials/index.html (accessed March 31, 2026)
 """
+
 
 import os
 import numpy as np
@@ -14,14 +18,14 @@ from mne import concatenate_epochs
 import gc
 
 
-############# needs to be specified ##########
+########## need to specify ##########
 
-# participant/participant ID
+# participant ID
 subject = 11
 
-#############################################
+###########################################
 
-file_path = "/Users/Data/Dream/Metadata.xlsx"
+file_path = "/Users/Data/Metadata.xlsx"
 
 df = pd.read_excel(file_path)
 exp_days = sorted(map(int, df[df['Participant ID'] == subject]['Exp Day'].dropna().unique()))
@@ -65,7 +69,7 @@ def take_runs(fif_files):
     return {key: run_groups[key] for key in sorted_keys}
 
 
-### compute noise covariance from the fif file of the first run for each experimental day
+##### compute noise covariance from the fif file of the first run for each experimental day
 for ind in exp_days:
     ind = ind-1
     day_dir = Path.home() / "Data" / "Dream" / "MEG" / ExpDates[ind]
