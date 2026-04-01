@@ -1,21 +1,24 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Head model and forward computation based on the NNE-python tutorial
-based on the MNE-python tutorial <https://mne.tools/stable/auto_tutorials/forward/30_forward.html#sphx-glr-auto-tutorials-forward-30-forward-py> (last access: 2025/12/28)
+This script is based on the MNE tutorials:
+https://mne.tools/stable/auto_tutorials/index.html (accessed March 31, 2026)
 """
 
 import mne
 from pathlib import Path
 
 
-############# needs to be specified ##########
+########## need to specify ##########
 
-# participant/participant ID
+# participant ID
 subject = "Dream11"
 
 # raw file containing channel locations and types
-raw_fname = "/Users/Data/Dream/MEG/240527/run1_raw_tsss.fif" # Dream11 day3
+raw_fname = "/Users/Data/MEG/240101/run1_raw_tsss.fif" # Dream11 day3
 
-#############################################
+#####################################
+
 
 # paths to FreeSurfer reconstructions
 FREESURFER_HOME = "/Applications/freesurfer"
