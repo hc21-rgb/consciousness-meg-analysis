@@ -1,5 +1,6 @@
 # consciousness-meg-analysis
-This repository contains the analysis code for　“The neural basis of consciousness during evening naps measured by MEG: a registered report” (Hemmi et al., 2026).
+This repository contains the analysis code for
+“The neural basis of consciousness during evening naps measured by MEG: a registered report” (Hemmi et al., 2026).
 
 The repository includes the following Python scripts:
 
@@ -18,9 +19,17 @@ Preprocesses raw data by applying notch filtering, downsampling, and independent
 SourceEstimate.py
 Performs source reconstruction, computes power spectral density (PSD), and morphs individual source-level PSD maps to a template brain.
 
-GroupAnalysis_TFCE.py
-Performs Threshold-Free Cluster Enhancement (TFCE)–based statistical analysis and computes Bayes factors.  
 
+
+MetaData.xlsx contains the information required for epoching. In this file, “Exp date” is replaced with surrogate dates to protect participants’ personal information.
+
+MEG, EEG, and EOG data, subjective reports, and associated metadata will be made publicly available as part of the DREAM database
+(https://doi.org/10.6084/m9.figshare.27116590) upon completion of the research associated with this study.
+
+Structural MRI data will be shared upon reasonable request, in accordance with personal data protection regulations.
+
+For questions or inquiries, please contact the corresponding author:
+Dr. Chihiro Hiramatsu, at: hiramatsu.chihiro.025[at]m.kyushu-u.ac.jp
 
 MEG, EEG, and EOG data, subjective reports, and associated metadata will be made publicly available as part of the DREAM database
 (https://doi.org/10.6084/m9.figshare.27116590
