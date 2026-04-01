@@ -33,7 +33,7 @@ data_list = []
 metadata_list = []
 
 # read meta data
-file_path = "/Users/Data/MetaData.xlsx"
+file_path = "/Users/Data/Dream/MetaData.xlsx"
 
 df = pd.read_excel(file_path)
 exp_days = sorted(map(int, df[df['Participant ID'] == participant]['Exp Day'].dropna().unique()))
