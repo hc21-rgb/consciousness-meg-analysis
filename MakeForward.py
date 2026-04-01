@@ -15,7 +15,7 @@ from pathlib import Path
 subject = "Dream11"
 
 # raw file containing channel locations and types
-raw_fname = "/Users/Data/MEG/240101/run1_raw_tsss.fif" # Dream11 day3
+raw_fname = "/Users/Data/Dream/MEG/240101/run1_raw_tsss.fif" # Dream11 day3
 
 #####################################
 
