@@ -1,34 +1,31 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-perform FreeSurfer reconstruction with recon-all and manual coregistration
-
+This script is based on the MNE tutorials:
+https://mne.tools/stable/auto_tutorials/index.html (accessed March 31, 2026)
 """
 
-import os
 import subprocess
 from pathlib import Path
 import mne
 
 
-############# needs to be specified ##########
+########## need to specify ##########
 
-# participant/participant ID
+# participant ID
 subject = "Dream11"
 
-#############################################
+nifti_file = "/Users/Data/MRI/Dream11/Dream11/DICOM_T1w.nii.gz"
+
+#####################################
 
 
-# path setting
-fshome = "/Applications/freesurfer"
-os.environ['FREESURFER_HOME'] = fshome
-os.environ['SUBJECTS_DIR'] = f"{fshome}/subjects"
-os.environ["PATH"] = f"{fshome}/bin:" + os.environ["PATH"]
-
+# setting
 FREESURFER_HOME = "/Applications/freesurfer"
 SUBJECTS_DIR = f"{FREESURFER_HOME}/subjects"
-nifti_file = f"/Users/Data/Dream/MRI/{subject}/NIFTI/{subject}_T1.nii.gz"
 
 
-### recon-all
+# reconstruct FreeSurfer by recon-all
 cmd = f"""
 export FREESURFER_HOME={FREESURFER_HOME} && \
 source $FREESURFER_HOME/SetUpFreeSurfer.sh && \
@@ -41,7 +38,7 @@ res = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
 print(res.stdout)
 print(res.stderr)
 
-# generate source space and BEM for MNE
+# fenerate source space and BEM for MNE
 mne.set_config("SUBJECTS_DIR", SUBJECTS_DIR)
 src = mne.setup_source_space(subject, spacing="oct6", subjects_dir=SUBJECTS_DIR, add_dist=False)
 
@@ -58,10 +55,9 @@ mne.write_bem_solution(bem_path, bem_sol)
 
 print("Source space and BEM for MNE are created")
 
-### manual coregistration
+# manual step
 print("Coregistration by MNE GUI ")
-mne.gui.coregistration(subject=subject, subjects_dir='/Applications/freesurfer/subjects')
-# see <https://mne.tools/stable/generated/mne.gui.coregistration.html#mne.gui.coregistration> last access(2025/12/28)
+mne.gui.coregistration(subject='Dream05', subjects_dir='/Applications/freesurfer/subjects')
 
 
-print(">>> mne.gui.coregistration(subject=subject, subjects_dir='...')")
+print(">>> mne.gui.coregistration(subject='Dream05', subjects_dir='...')")
