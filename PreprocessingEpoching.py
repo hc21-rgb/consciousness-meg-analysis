@@ -1,5 +1,8 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Preprocessing and Epoching
+This script is based on the MNE tutorials:
+https://mne.tools/stable/auto_tutorials/index.html (accessed March 31, 2026)
 """
 
 import os
@@ -12,18 +15,16 @@ from pathlib import Path
 from collections import defaultdict
 from mne import concatenate_epochs
 
+########## need to specify ##########
 
-############# needs to be specified ##########
+# participant ID
+participant = 11
 
-# participant/participant ID
-subject = 11
+# seconds before awakening
+Duration = 20  
 
-#############################################
+#####################################
 
-# analysis duration prior to awakening
-Duration = 20
-
-# ica method
 ica_method = 'infomax'
 
 # initialize lists
@@ -31,14 +32,15 @@ epochs_list = []
 data_list = []
 metadata_list = []
 
-# read metadata
-file_path = "/Users/Data/Dream/Metadata.xlsx"
+# read meta data
+file_path = "/Users/Data/MetaData.xlsx"
+
 df = pd.read_excel(file_path)
-exp_days = sorted(map(int, df[df['Participant ID'] == subject]['Exp Day'].dropna().unique()))
+exp_days = sorted(map(int, df[df['Participant ID'] == participant]['Exp Day'].dropna().unique()))
 
 for ExpDay in exp_days:
     ExpDates = df.loc[
-        (df['Participant ID'] == subject) & (df['Exp Day'] == ExpDay),
+        (df['Participant ID'] == participant) & (df['Exp Day'] == ExpDay),
         'Exp date'
     ]
     ExpDate = ExpDates.iloc[0].strftime("%y%m%d")
@@ -77,7 +79,7 @@ for ExpDay in exp_days:
         run_id = i + 1
 
         df_run = df[
-            (df['Participant ID'] == subject) &
+            (df['Participant ID'] == participant) &
             (df['Exp Day'] == ExpDay) &
             (df['run'] == run_id) &
             (df['exclusion_flag'] != 1)
@@ -99,30 +101,30 @@ for ExpDay in exp_days:
         unsure_asleep = df_run['Unsure if asleep'].tolist()
         wake_thinking = df_run['Not asleep_thinking about something'].tolist()
         wake_nothinking = df_run['Not asleep_not thinking about anything'].tolist()
-        sleepstage = df_run['U-Sleep_last30s'].tolist()
         
 
         file_list = run_files[i]
-        for f in file_list:
+        for f in file_list: # ensure fif_files
             print(f)
         raw_list = [mne.io.read_raw_fif(str(fifdir / fname), preload=True, on_split_missing="ignore") for fname in file_list]
         for raw in raw_list:
             raw.set_meas_date(None)
         raw_crun = mne.concatenate_raws(raw_list)
                         
-        # set time to 0
+        # Set time to 0
         raw_data = raw_crun.get_data()
         info = raw_crun.info.copy()
         raw_crun_zeroed = mne.io.RawArray(raw_data, info)
         
-        # notch filter
+        # Notch filter
         raw_crun_zeroed.notch_filter(freqs=np.arange(60, 241, 60))
          
         # bandpath filter
         raw_crun_zeroed.filter(l_freq=0.3, h_freq=50)
 
-        # downsampling
+        ## downsampling
         raw_crun_zeroed.resample(sfreq=500, npad="auto")
+        #raw_crun_zeroed.plot_psd(fmax=250)
          
         del raw, raw_crun, raw_data
         gc.collect()
@@ -130,7 +132,8 @@ for ExpDay in exp_days:
         # bad channel
         print("Bad channels:", raw_crun_zeroed.info['bads'])
 
-        ### ICA
+
+        # ICA
         ica = mne.preprocessing.ICA(n_components=20, method=ica_method, random_state=97)
         ica.fit(raw_crun_zeroed, picks='meg')
             
@@ -141,7 +144,8 @@ for ExpDay in exp_days:
         ecg_inds_EOGR, scores_EOGR = ica.find_bads_eog(raw_crun_zeroed, ch_name='EEG021', measure='correlation')
         ecg_inds_muscle, scores_muscle = ica.find_bads_muscle(raw_crun_zeroed, threshold=0.5, start=None, stop=None, l_freq=7, h_freq=45, sphere=None, verbose=None)
 
-        # for auto ICA exclusion
+
+        # for auto ica exclusion
         ECG_ctps = np.abs(np.array(scores_ECG_ctps))
         ECG_ctps_index = np.argmax(ECG_ctps)
 
@@ -175,6 +179,7 @@ for ExpDay in exp_days:
         ica.exclude = ica_exclusion_comps #automatic exclusion
         reconst_raw = raw_crun_zeroed.copy()# ica.apply() changes the Raw object in-place, so let's make a copy first:
         ica.apply(reconst_raw)
+
         
         sfreq = reconst_raw.info['sfreq']
         valid_sec = [s for s in time_event if (s - Duration) >= reconst_raw.first_time and s <= reconst_raw.times[-1]]
@@ -184,9 +189,8 @@ for ExpDay in exp_days:
         event_samples = [int(s * sfreq) for s in valid_sec]
         events = np.array([[samp, 0, 1] for samp in event_samples], dtype=int)
 
-        # take metadadta
         metadata = pd.DataFrame({
-            'participant': [subject] * len(event_samples),
+            'participant': [participant] * len(event_samples),
             'ExpDay': [ExpDay] * len(event_samples),
             'run': [run_id] * len(event_samples),
             'time': time_event[:len(event_samples)],
@@ -196,8 +200,7 @@ for ExpDay in exp_days:
             'asleep_nodream': asleep_nodream[:len(event_samples)],
             'unsure_asleep': unsure_asleep[:len(event_samples)],
             'wake_thinking': wake_thinking[:len(event_samples)],
-            'wake_nothinking': wake_nothinking[:len(event_samples)],
-            'sleepstage': sleepstage[:len(event_samples)]            
+            'wake_nothinking': wake_nothinking[:len(event_samples)],           
         })
 
         epochs = mne.Epochs(
@@ -225,8 +228,15 @@ epochs_all = concatenate_epochs(epochs_list, on_mismatch="ignore")
 
 # save epoch
 save_dir = "/Users/Data/Dream/MNE/Epoch"
+
+# make a folder if the folder does not exist
 os.makedirs(save_dir, exist_ok=True)
-outfilename = os.path.join(save_dir, f"Dream{subject}_Notch_BP_500Hz_autoICA_{Duration}s_epo.fif")    
+
+# save file name
+outfilename = os.path.join(save_dir, f"D{participant}_Notch_BP_500Hz_autoICA_{Duration}s_epo.fif")
+
+# save
 epochs_all.save(outfilename, overwrite=True)
+
 
 print(f"Total epochs: {len(epochs_all)}")
