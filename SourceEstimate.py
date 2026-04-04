@@ -175,6 +175,38 @@ del band_power, psd, freqs
 gc.collect()
  
 
+##### exclude exp day which does not includes both full and less epochs. 
+day_full = epochs_full.metadata.ExpDay
+day_less = epochs_less.metadata.ExpDay
+common_days = np.intersect1d(day_full.unique(), day_less.unique())
+
+X_full_list = []
+X_less_list = []
+day_full_list = []
+day_less_list = []
+
+for day in common_days:
+    idx_full = (day_full == day).values
+    idx_less = (day_less == day).values
+
+    Xf = X_full[idx_full]   # shape: (n_full_day, n_sources)
+    Xl = X_less[idx_less]   # shape: (n_less_day, n_sources)
+
+    n_full = Xf.shape[0]
+    n_less = Xl.shape[0]
+
+    full_day = [day] * n_full
+    less_day = [day] * n_less
+
+    X_full_list.append(Xf)
+    X_less_list.append(Xl)
+    day_full_list.extend(full_day)
+    day_less_list.extend(less_day)
+
+X_full_final = np.vstack(X_full_list)
+X_less_final = np.vstack(X_less_list)
+
+
 ##### ROI
 # read labels of Desikan-Killiany atlas
 labels = mne.read_labels_from_annot(f"Dream{subject}", parc='aparc', subjects_dir=subjects_dir, hemi='both')
@@ -218,12 +250,12 @@ posterior_indices = np.unique(posterior_indices).astype(int)
 
 ## mean power per ROI per epoch
 # frontal
-dreamful_frontal = X_full[:, frontal_indices].mean(axis=1)
-dreamless_frontal = X_less[:, frontal_indices].mean(axis=1)
+dreamful_frontal = X_full_final[:, frontal_indices].mean(axis=1)
+dreamless_frontal = X_less_final[:, frontal_indices].mean(axis=1)
 
 # posterior
-dreamful_posterior = X_full[:, posterior_indices].mean(axis=1)
-dreamless_posterior = X_less[:, posterior_indices].mean(axis=1)
+dreamful_posterior = X_full_final[:, posterior_indices].mean(axis=1)
+dreamless_posterior = X_less_final[:, posterior_indices].mean(axis=1)
 
 
 # ttest with Bayse factor
@@ -346,11 +378,11 @@ if X_full.shape[1] != n_total:
     used_vertices = [X_vert_lh, X_vert_rh]
 
 # make source estimate of mean power for X_full and X_less
-mean_full = X_full.mean(axis=0)
-mean_less = X_less.mean(axis=0)
+mean_full = X_full_final.mean(axis=0)
+mean_less = X_less_final.mean(axis=0)
 
 # make source estimate for power difference
-diff_data = X_full.mean(axis=0) - X_less.mean(axis=0)  # shape: (n_sources,)
+diff_data = X_full_final.mean(axis=0) - X_less_final.mean(axis=0)  # shape: (n_sources,)
 
 stc_full = mne.SourceEstimate(mean_full[:, np.newaxis], vertices=used_vertices,tmin=0, tstep=1, subject=f"Dream{subject}")
 stc_less = mne.SourceEstimate(mean_less[:, np.newaxis], vertices=used_vertices,tmin=0, tstep=1, subject=f"Dream{subject}")
