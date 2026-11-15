@@ -1,0 +1,3 @@
+hypothesis,outcome,pilot_center_raw,pilot_residual_sd_raw_fixed,pilot_beta_state_mean,sigma_participant_intercept_anchor,sigma_participant_slope_anchor,sigma_day_anchor,sigma_resid_anchor,pilot_beta_rhat,pilot_beta_ess_bulk
+H1_posterior_delta,Posterior_delta,0.0197623801,0.009684819378596974,-0.026,0.394,0.332,0.896,0.996,1.0,10700.0
+H2_posterior_gamma,Posterior_gamma,0.0036203453999999998,0.0007478336761791827,-0.008,0.439,0.315,1.094,0.993,1.0,11349.0
