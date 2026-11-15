@@ -1,0 +1,5 @@
+hypothesis,effect_attenuation,slope_multiplier,BF_threshold,first_N_meeting_80pct_among_tested,number_of_lower_Ns_not_fully_tested,minimum_valid_simulations_per_N
+H1_posterior_delta,1.0,1.0,3.0,20,14,500
+H1_posterior_delta,1.0,1.0,10.0,33,20,500
+H2_posterior_gamma,1.0,1.0,3.0,28,23,500
+H2_posterior_gamma,1.0,1.0,10.0,28,23,500
