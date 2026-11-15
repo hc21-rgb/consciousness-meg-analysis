@@ -1,423 +1,587 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-This script is based on the MNE tutorials:
-https://mne.tools/stable/auto_tutorials/index.html (accessed March 31, 2026)
+Run-wise source reconstruction and Experience vs No-experience comparison.
+1. Read run-wise epoch files from Epoch/D{participant}/.
+2. Create an inverse operator separately for each run.
+3. Reconstruct each epoch in each run in source space.
+4. Confirm that all runs use the same source-space vertices.
+5. Concatenate source-power arrays only after source reconstruction.
+6. Preserve the original day-level rule: retain only ExpDay values containing
+   both Experience and No-experience epochs.
+7. Plot mean source power for each epoch per ROI and save the plot
 """
 
 import gc
-import numpy as np
 from pathlib import Path
+
 import matplotlib
-matplotlib.use('Qt5Agg') 
-import matplotlib.pyplot as plt#from mne import concatenate_stcs
-from statsmodels.stats.multitest import fdrcorrection
-from statsmodels.stats.multitest import multipletests
+matplotlib.use("Qt5Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import mne
-from mne.minimum_norm import apply_inverse, make_inverse_operator
-from mne.time_frequency import psd_array_welch
 import pingouin as pg
-mne.set_log_level('WARNING')
-from nibabel.freesurfer import io as fsio
-from scipy.stats import ttest_ind
-import sys
+from statsmodels.stats.multitest import multipletests
+from mne.minimum_norm import apply_inverse
+from mne.time_frequency import psd_array_welch
+
+mne.set_log_level("WARNING")
 
 
-########## need to specify ##########
-# participant ID
-subject = 11
+# =============================================================================
+# Settings
+# =============================================================================
+participant = 11
 
-# frequency range
-f_min = 1
-f_max = 4
-#####################################
+f_min = 20
+f_max = 50
 
 duration = 20
-invmethod='dSPM'
-lambda2=1./9. 
+invmethod = "dSPM"
+lambda2 = 1.0 / 9.0
+stage = "allstages"
 
-# data
-subjectname = f"Dream{subject}"
-epochfile = f"D11_Notch_BP_500Hz_autoICA_{duration}s_epo.fif"
-noisecovfile1 = f"D{subject}_day1_noise_cov.fif"
-noisecovfile2 = f"D{subject}_day2_noise_cov.fif"
-noisecovfile3 = f"D{subject}_day3_noise_cov.fif"
+# Pattern used to find run-wise epoch files.
+# Example directory:
+# ~/Data/Dream/MNE/Epoch/D5/
+#
+# If all files in the directory are the intended epoch files, use "*-epo.fif".
+epoch_pattern = f"*{duration}s_epo.fif"
 
-# out names
-figname = f"D{subject}_{f_min}-{f_max}Hz_{duration}sec_{invmethod}.png"
-morph_diff = f"D{subject}_PSDdiff_{f_min}-{f_max}Hz_{duration}sec_{invmethod}"
-morph_full = f"D{subject}_PSDfull_{f_min}-{f_max}Hz_{duration}sec_{invmethod}"
-morph_less = f"D{subject}_PSDless__{f_min}-{f_max}Hz_{duration}sec_{invmethod}"
-
-
-# make path for files
-morph_savepath_diff = Path.home() / "Data" / "Dream" / "MNE" / "Morph" / morph_diff
-morph_savepath_full = Path.home() / "Data" / "Dream" / "MNE" / "Morph" / morph_full
-morph_savepath_less = Path.home() / "Data" / "Dream" / "MNE" / "Morph" / morph_less
+# Noise covariance files are still selected by experimental day.
+# Remove/comment entries for days that do not exist for a participant.
+noise_cov_files = {
+    1: f"D{participant}_day1_noise_cov.fif",
+    2: f"D{participant}_day2_noise_cov.fif",
+    3: f"D{participant}_day3_noise_cov.fif",
+    4: f"D{participant}_day4_noise_cov.fif",
+}
 
 
+# =============================================================================
+# Paths
+# =============================================================================
 subjects_dir = "/Applications/freesurfer/subjects/"
-ffwd = f"Dream{subject}-fwd.fif" 
-path_fwd = Path(subjects_dir) / f"Dream{subject}" / "bem" / ffwd
+subject_name = f"Dream{participant}"
+
+epoch_dir = Path.home() / "Data" / "Dream" / "MNE" / "Epoch" / f"D{participant}"
+noise_cov_dir = Path.home() / "Data" / "Dream" / "MNE" / "NoiseCov"
+fig_save_dir = Path.home() / "Data" / "Dream" / "MNE" / "Results" 
+
+fwd_file = Path(subjects_dir) / subject_name / "bem" / f"{subject_name}-fwd.fif"
+
+figname = (
+    f"D{participant}_{stage}_{f_min}-{f_max}Hz_{duration}sec_"
+    f"{invmethod}_2ROIs_ICAzsc.png"
+)
+
+csv_name = (
+    f"D{participant}_{stage}_{f_min}-{f_max}Hz_{duration}sec_"
+    f"{invmethod}_ROIpower_by_epoch.csv"
+)
+csv_path = fig_save_dir / csv_name
 
 
-epochpath = Path.home() / "Data" / "Dream" / "MNE" / "Epoch" / epochfile
-path_noise_cov1 = Path.home() / "Data" / "Dream" / "MNE" / "NoiseCov" / noisecovfile1
-path_noise_cov2 = Path.home() / "Data" / "Dream" / "MNE" / "NoiseCov" / noisecovfile2
-path_noise_cov3 = Path.home() / "Data" / "Dream" / "MNE" / "NoiseCov" / noisecovfile3
- 
- 
-# read epochs and fwd files
-epochs = mne.read_epochs(epochpath, preload=True)
-epochs.pick_types(meg=True, eeg=False)
+# =============================================================================
+# Helper functions
+# =============================================================================
+def get_condition_masks(epochs):
+    """Return boolean masks for Experience and No-experience epochs."""
+    if epochs.metadata is None:
+        raise RuntimeError("Epoch metadata are required, but metadata=None.")
 
-fwd = mne.read_forward_solution(path_fwd)
-noise_cov_day1 = mne.read_cov(path_noise_cov1)
-noise_cov_day2 = mne.read_cov(path_noise_cov2)
-noise_cov_day3 = mne.read_cov(path_noise_cov3)
- 
+    md = epochs.metadata
 
-##### create inverse operator
-if 'noisecovfile1' in locals():  
-    inverse_operator_day1 = mne.minimum_norm.make_inverse_operator(
-        epochs.info, fwd, noise_cov_day1, loose=0.2, depth=0.8, rank='info'
+    required_columns = {
+        "dream",
+        "whitedream",
+        "unsure_dream",
+        "wake_thinking",
+        "wake_nothinking",
+        "asleep_nodream",
+        "ExpDay",
+    }
+    missing = required_columns.difference(md.columns)
+    if missing:
+        raise RuntimeError(f"Missing metadata columns: {sorted(missing)}")
+
+    ix_exp = (
+        (md["dream"] == 1)
+        & (~md["whitedream"].isin([1, 0.5]))
+        & (~md["unsure_dream"].isin([1, 0.5]))
+        & (~md["wake_thinking"].isin([1, 0.5]))
+        & (~md["wake_nothinking"].isin([1, 0.5]))
+        & (~md["asleep_nodream"].isin([1, 0.5]))
     )
 
-if 'noisecovfile2' in locals():  
-    inverse_operator_day2 = mne.minimum_norm.make_inverse_operator(
-        epochs.info, fwd, noise_cov_day2, loose=0.2, depth=0.8, rank='info'
+    ix_noexp = (
+        (~md["dream"].isin([1, 0.5]))
+        & (~md["whitedream"].isin([1, 0.5]))
+        & (~md["unsure_dream"].isin([1, 0.5]))
+        & (~md["wake_thinking"].isin([1, 0.5]))
+        & (~md["wake_nothinking"].isin([1, 0.5]))
+        & (md["asleep_nodream"] == 1)
     )
 
-if 'noisecovfile3' in locals():  
-    inverse_operator_day3 = mne.minimum_norm.make_inverse_operator(
-        epochs.info, fwd, noise_cov_day3, loose=0.2, depth=0.8, rank='info'
-    )
+    return ix_exp.to_numpy(), ix_noexp.to_numpy()
 
 
-##### calculate spectral power 
-# filter epochs
-ix1 = (
-    (epochs.metadata["dream"] == 1) &
-    (~epochs.metadata["whitedream"].isin([1, 0.5])) &
-    (~epochs.metadata["unsure_dream"].isin([1, 0.5])) &
-    (~epochs.metadata["wake_thinking"].isin([1, 0.5])) &
-    (~epochs.metadata["wake_nothinking"].isin([1, 0.5])) &
-    (~epochs.metadata["asleep_nodream"].isin([1, 0.5])))
+def get_single_expday(epochs, epoch_file):
+    """Return the unique ExpDay for a run; require one day per run file."""
+    days = epochs.metadata["ExpDay"].dropna().unique()
+    if len(days) != 1:
+        raise RuntimeError(
+            f"{epoch_file.name}: expected exactly one ExpDay per run, "
+            f"but found {days.tolist()}"
+        )
+    return int(days[0])
 
-ix2 = (
-    (~epochs.metadata["dream"].isin([1, 0.5])) &  
-    (~epochs.metadata["whitedream"].isin([1, 0.5])) &
-    (~epochs.metadata["unsure_dream"].isin([1, 0.5])) &
-    (~epochs.metadata["wake_thinking"].isin([1, 0.5])) &
-    (~epochs.metadata["wake_nothinking"].isin([1, 0.5])) &
-    (epochs.metadata["asleep_nodream"]==1))
 
-epochs_full = epochs[ix1]
-epochs_less = epochs[ix2]
+def source_band_power_for_epochs(
+    epochs_subset,
+    inverse_operator,
+    f_min,
+    f_max,
+    lambda2,
+    invmethod,
+    expected_vertices=None,
+):
+    """Source reconstruct each epoch and return band power per source vertex."""
+    if len(epochs_subset) == 0:
+        return np.empty((0, 0)), expected_vertices
 
-##### frequency power analysis
-sfreq = epochs.info['sfreq']
+    sfreq = epochs_subset.info["sfreq"]
+    n_per_seg = int(2 * sfreq)      # 2-s segments
+    n_overlap = int(n_per_seg / 2)  # 50% overlap
 
-# Welch parameters
-n_per_seg = int(2 * sfreq) # 2sec segments
-n_overlap = int(n_per_seg / 2) # 50% overlap
-    
-# calculate stc_band for each epoch
-psds_full = []
-for i in range(len(epochs_full)):
-    ep_data = epochs_full.get_data()[i]  # shape: (n_channels, n_times)
-    epoch = mne.EvokedArray(ep_data, epochs_full.info, tmin=epochs_full.tmin)
-    
-    if   epochs_full.metadata.iloc[i]['ExpDay'] == 1:
-        stc = apply_inverse(epoch, inverse_operator_day1, lambda2=lambda2, method=invmethod)
-    elif epochs_full.metadata.iloc[i]['ExpDay'] == 2:
-        stc = apply_inverse(epoch, inverse_operator_day2, lambda2=lambda2, method=invmethod)
-    elif epochs_full.metadata.iloc[i]['ExpDay'] == 3:
-        stc = apply_inverse(epoch, inverse_operator_day3, lambda2=lambda2, method=invmethod)
+    band_powers = []
+
+    for ep_data in epochs_subset.get_data():
+        epoch = mne.EvokedArray(
+            ep_data,
+            epochs_subset.info,
+            tmin=epochs_subset.tmin,
+        )
+
+        stc = apply_inverse(
+            epoch,
+            inverse_operator,
+            lambda2=lambda2,
+            method=invmethod,
+        )
+
+        current_vertices = [stc.vertices[0].copy(), stc.vertices[1].copy()]
+
+        if expected_vertices is None:
+            expected_vertices = current_vertices
+        else:
+            same_lh = np.array_equal(current_vertices[0], expected_vertices[0])
+            same_rh = np.array_equal(current_vertices[1], expected_vertices[1])
+            if not (same_lh and same_rh):
+                raise RuntimeError(
+                    "Source-space vertices differ between runs/epochs. "
+                    "All runs must use the same source space before concatenation."
+                )
+
+        psd, _ = psd_array_welch(
+            stc.data,
+            sfreq=sfreq,
+            fmin=f_min,
+            fmax=f_max,
+            n_fft=n_per_seg,
+            n_overlap=n_overlap,
+            window="hamming",
+            average="mean",
+        )
+
+        band_power = psd.mean(axis=1)
+        band_powers.append(band_power)
+
+    return np.vstack(band_powers), expected_vertices
+
+
+def label_to_stc_indices(label, used_vertices):
+    """Map a FreeSurfer label to STC row indices, respecting hemisphere."""
+    lh_vertices, rh_vertices = used_vertices
+
+    if label.hemi == "lh":
+        return np.where(np.isin(lh_vertices, label.vertices))[0]
+    if label.hemi == "rh":
+        return len(lh_vertices) + np.where(np.isin(rh_vertices, label.vertices))[0]
+
+    raise ValueError(f"Unexpected label hemisphere: {label.hemi}")
+
+
+# =============================================================================
+# Read forward solution and noise covariance matrices
+# =============================================================================
+fwd = mne.read_forward_solution(fwd_file)
+
+noise_cov_by_day = {}
+for day, filename in noise_cov_files.items():
+    cov_path = noise_cov_dir / filename
+    if cov_path.exists():
+        noise_cov_by_day[day] = mne.read_cov(cov_path)
     else:
-        raise ValueError(f"Unexpected ExpDay value: {epochs_full.metadata.ExpDay[i]}") 
-                
-    data = stc.data
-    psd, freqs = psd_array_welch(data, sfreq=sfreq, fmin=f_min, fmax=f_max, 
-                               n_fft=n_per_seg, n_overlap=n_overlap,
-                               window='hamming', average='mean')  # psd shape: (n_sources, n_freqs)
-    band_power = psd.mean(axis=1)  # shape: (n_sources,)
-    psds_full.append(band_power)
-    
-X_full = np.array(psds_full)  # shape: (n_epochs_full, n_sources)
+        print(f"Noise covariance not found; day {day} will be unavailable: {cov_path}")
+
+if not noise_cov_by_day:
+    raise FileNotFoundError("No noise covariance files were found.")
 
 
-psds_less = []
-for i in range(len(epochs_less)):
-    ep_data = epochs_less.get_data()[i]  # shape: (n_channels, n_times)
-    epoch = mne.EvokedArray(ep_data, epochs_less.info, tmin=epochs_less.tmin)
-    
-    if   epochs_less.metadata.iloc[i]['ExpDay'] == 1:
-        stc = apply_inverse(epoch, inverse_operator_day1, lambda2=lambda2, method=invmethod)
-    elif epochs_less.metadata.iloc[i]['ExpDay'] == 2:
-        stc = apply_inverse(epoch, inverse_operator_day2, lambda2=lambda2, method=invmethod)
-    elif epochs_less.metadata.iloc[i]['ExpDay'] == 3:
-        stc = apply_inverse(epoch, inverse_operator_day3, lambda2=lambda2, method=invmethod)
-    else:
-        raise ValueError(f"Unexpected ExpDay value: {epochs_less.metadata.ExpDay[i]}") 
-                
-    data = stc.data
-    psd, freqs = psd_array_welch(data, sfreq=sfreq, fmin=f_min, fmax=f_max, 
-                              n_fft=n_per_seg, n_overlap=n_overlap,
-                              window='hamming', average='mean')  # psd shape: (n_sources, n_freqs)  
-    
-    band_power = psd.mean(axis=1)  # shape: (n_sources,)
-    psds_less.append(band_power)
-    
-X_less = np.array(psds_less)  # shape: (n_epochs_less, n_sources)
+# =============================================================================
+# Find run-wise epoch files
+# =============================================================================
+epoch_files = sorted(epoch_dir.glob(epoch_pattern))
 
-del band_power, psd, freqs
-gc.collect()
- 
+# Fallback is useful when filenames do not contain the duration string.
+if len(epoch_files) == 0:
+    epoch_files = sorted(epoch_dir.glob("*zsc-epo.fif"))
 
-##### exclude exp day which does not includes both full and less epochs. 
-day_full = epochs_full.metadata.ExpDay
-day_less = epochs_less.metadata.ExpDay
-common_days = np.intersect1d(day_full.unique(), day_less.unique())
+if len(epoch_files) == 0:
+    raise FileNotFoundError(f"No epoch files found in {epoch_dir}")
 
-X_full_list = []
-X_less_list = []
-day_full_list = []
-day_less_list = []
-
-for day in common_days:
-    idx_full = (day_full == day).values
-    idx_less = (day_less == day).values
-
-    Xf = X_full[idx_full]   # shape: (n_full_day, n_sources)
-    Xl = X_less[idx_less]   # shape: (n_less_day, n_sources)
-
-    n_full = Xf.shape[0]
-    n_less = Xl.shape[0]
-
-    full_day = [day] * n_full
-    less_day = [day] * n_less
-
-    X_full_list.append(Xf)
-    X_less_list.append(Xl)
-    day_full_list.extend(full_day)
-    day_less_list.extend(less_day)
-
-X_full_final = np.vstack(X_full_list)
-X_less_final = np.vstack(X_less_list)
+print("Run-wise epoch files:")
+for p in epoch_files:
+    print(f"  {p.name}")
+print()
 
 
-##### ROI
-# read labels of Desikan-Killiany atlas
-labels = mne.read_labels_from_annot(f"Dream{subject}", parc='aparc', subjects_dir=subjects_dir, hemi='both')
-    
-label_dict = {lab.name: lab for lab in labels}
+# =============================================================================
+# Run-wise source reconstruction
+# =============================================================================
+exp_arrays = []
+noexp_arrays = []
+exp_days = []
+noexp_days = []
+exp_runs = []
+noexp_runs = []
 
-frontal_labels = ['superiorfrontal-lh','rostralmiddlefrontal-lh','caudalmiddlefrontal-lh','parsopercularis-lh','parstriangularis-lh','parsorbitalis-lh','lateralorbitofrontal-lh','medialorbitofrontal-lh','frontalpole-lh','precentral-lh','paracentral-lh',
-                     'superiorfrontal-rh','rostralmiddlefrontal-rh','caudalmiddlefrontal-rh','parsopercularis-rh','parstriangularis-rh','parsorbitalis-rh','lateralorbitofrontal-rh','medialorbitofrontal-rh','frontalpole-rh','precentral-rh','paracentral-rh']
+# Vertex list shared by every reconstructed epoch/run.
+used_vertices = None
+
+for run_index, epoch_file in enumerate(epoch_files, start=1):
+    print(f"Processing run {run_index}: {epoch_file.name}")
+
+    epochs_run = mne.read_epochs(epoch_file, preload=True)
+    epochs_run.pick_types(meg=True, eeg=False)
+
+    if epochs_run.metadata is None:
+        raise RuntimeError(f"{epoch_file.name}: metadata are required.")
+
+    day = get_single_expday(epochs_run, epoch_file)
+
+    if day not in noise_cov_by_day:
+        raise RuntimeError(
+            f"{epoch_file.name}: ExpDay={day}, but no noise covariance "
+            f"was loaded for day {day}."
+        )
+
+    # IMPORTANT: inverse operator is made separately for each run using
+    # that run's Info, while the same participant forward solution is used.
+    inverse_operator_run = mne.minimum_norm.make_inverse_operator(
+        epochs_run.info,
+        fwd,
+        noise_cov_by_day[day],
+        loose=0.2,
+        depth=0.8,
+        rank="info",
+    )
+
+    ix_exp, ix_noexp = get_condition_masks(epochs_run)
+    epochs_exp_run = epochs_run[ix_exp]
+    epochs_noexp_run = epochs_run[ix_noexp]
+
+    print(
+        f"  ExpDay={day}; Experience={len(epochs_exp_run)}, "
+        f"No-experience={len(epochs_noexp_run)}"
+    )
+
+    # Experience
+    if len(epochs_exp_run) > 0:
+        X_exp_run, used_vertices = source_band_power_for_epochs(
+            epochs_exp_run,
+            inverse_operator_run,
+            f_min,
+            f_max,
+            lambda2,
+            invmethod,
+            expected_vertices=used_vertices,
+        )
+        exp_arrays.append(X_exp_run)
+        exp_days.extend([day] * len(X_exp_run))
+        exp_runs.extend([run_index] * len(X_exp_run))
+
+    # No experience
+    if len(epochs_noexp_run) > 0:
+        X_noexp_run, used_vertices = source_band_power_for_epochs(
+            epochs_noexp_run,
+            inverse_operator_run,
+            f_min,
+            f_max,
+            lambda2,
+            invmethod,
+            expected_vertices=used_vertices,
+        )
+        noexp_arrays.append(X_noexp_run)
+        noexp_days.extend([day] * len(X_noexp_run))
+        noexp_runs.extend([run_index] * len(X_noexp_run))
+
+    del epochs_run, inverse_operator_run
+    gc.collect()
 
 
-posterior_labels = ['postcentral-lh','supramarginal-lh','superiorparietal-lh','inferiorparietal-lh','precuneus-lh','lingual-lh','pericalcarine-lh','cuneus-lh','lateraloccipital-lh',
-                 'postcentral-rh','supramarginal-rh','superiorparietal-rh','inferiorparietal-rh','precuneus-rh','lingual-rh','pericalcarine-rh','cuneus-rh','lateraloccipital-rh']
+if not exp_arrays:
+    raise RuntimeError("No Experience epochs remained after filtering.")
+if not noexp_arrays:
+    raise RuntimeError("No No-experience epochs remained after filtering.")
+if used_vertices is None:
+    raise RuntimeError("No source estimates were generated.")
+
+# Concatenate only AFTER run-wise source reconstruction.
+X_exp_all = np.vstack(exp_arrays)
+X_noexp_all = np.vstack(noexp_arrays)
+exp_days = np.asarray(exp_days, dtype=int)
+noexp_days = np.asarray(noexp_days, dtype=int)
+exp_runs = np.asarray(exp_runs, dtype=int)
+noexp_runs = np.asarray(noexp_runs, dtype=int)
+
+print()
+print(f"All reconstructed Experience epochs: {X_exp_all.shape[0]}")
+print(f"All reconstructed No-experience epochs: {X_noexp_all.shape[0]}")
+print(f"Number of source vertices: {X_exp_all.shape[1]}")
 
 
-roi_dict = {"Frontal": frontal_labels, "Posterior": posterior_labels}
+# =============================================================================
+# Use only experimental days containing BOTH conditions
+# =============================================================================
+common_days = np.intersect1d(np.unique(exp_days), np.unique(noexp_days))
+
+if len(common_days) == 0:
+    raise RuntimeError(
+        "No ExpDay contains both Experience and No-experience epochs."
+    )
+
+keep_exp = np.isin(exp_days, common_days)
+keep_noexp = np.isin(noexp_days, common_days)
+
+X_full_final = X_exp_all[keep_exp]
+X_less_final = X_noexp_all[keep_noexp]
+
+day_full_final = exp_days[keep_exp]
+day_less_final = noexp_days[keep_noexp]
+run_full_final = exp_runs[keep_exp]
+run_less_final = noexp_runs[keep_noexp]
+
+print(f"Common ExpDay values retained: {common_days.tolist()}")
+print(f"Final Experience epochs: {len(X_full_final)}")
+print(f"Final No-experience epochs: {len(X_less_final)}")
+print()
 
 
-lh_vertno, rh_vertno = stc.vertices
-stc_vertices = np.concatenate([lh_vertno, rh_vertno])
+# =============================================================================
+# ROI definitions
+# =============================================================================
+labels = mne.read_labels_from_annot(
+    subject_name,
+    parc="aparc",
+    subjects_dir=subjects_dir,
+    hemi="both",
+)
+
+frontal_labels = [
+    "superiorfrontal-lh", "rostralmiddlefrontal-lh", "caudalmiddlefrontal-lh",
+    "parsopercularis-lh", "parstriangularis-lh", "parsorbitalis-lh",
+    "lateralorbitofrontal-lh", "medialorbitofrontal-lh", "frontalpole-lh",
+    "superiorfrontal-rh", "rostralmiddlefrontal-rh", "caudalmiddlefrontal-rh",
+    "parsopercularis-rh", "parstriangularis-rh", "parsorbitalis-rh",
+    "lateralorbitofrontal-rh", "medialorbitofrontal-rh", "frontalpole-rh",
+]
+
+parocc_labels = [
+    "supramarginal-lh", "superiorparietal-lh", "inferiorparietal-lh",
+    "precuneus-lh", "lingual-lh", "pericalcarine-lh", "cuneus-lh",
+    "lateraloccipital-lh",
+    "supramarginal-rh", "superiorparietal-rh", "inferiorparietal-rh",
+    "precuneus-rh", "lingual-rh", "pericalcarine-rh", "cuneus-rh",
+    "lateraloccipital-rh",
+]
+
+lh_vertno, rh_vertno = used_vertices
 
 frontal_indices = []
-posterior_indices = []
-
-def label_to_stc_indices_from_stc_vertices(label, stc_vertices):
-    label_verts_in_stc = np.intersect1d(label.vertices, stc_vertices)
-    return np.where(np.isin(stc_vertices, label_verts_in_stc))[0]
+parocc_indices = []
 
 for label in labels:
     if label.name in frontal_labels:
-        idx = label_to_stc_indices_from_stc_vertices(label, stc_vertices)
-        frontal_indices.extend(idx.tolist())
-    elif label.name in posterior_labels:
-        idx = label_to_stc_indices_from_stc_vertices(label, stc_vertices)
-        posterior_indices.extend(idx.tolist())
-        
+        frontal_indices.extend(label_to_stc_indices(label, used_vertices).tolist())
+    elif label.name in parocc_labels:
+        parocc_indices.extend(label_to_stc_indices(label, used_vertices).tolist())
 
-# take unique indices
 frontal_indices = np.unique(frontal_indices).astype(int)
-posterior_indices = np.unique(posterior_indices).astype(int)
+parocc_indices = np.unique(parocc_indices).astype(int)
+
+if len(frontal_indices) == 0 or len(parocc_indices) == 0:
+    raise RuntimeError("One or more ROI definitions matched no source vertices.")
 
 
-## mean power per ROI per epoch
-# frontal
+# =============================================================================
+# Mean source power per ROI per epoch
+# =============================================================================
 dreamful_frontal = X_full_final[:, frontal_indices].mean(axis=1)
 dreamless_frontal = X_less_final[:, frontal_indices].mean(axis=1)
 
-# posterior
-dreamful_posterior = X_full_final[:, posterior_indices].mean(axis=1)
-dreamless_posterior = X_less_final[:, posterior_indices].mean(axis=1)
+dreamful_parocc = X_full_final[:, parocc_indices].mean(axis=1)
+dreamless_parocc = X_less_final[:, parocc_indices].mean(axis=1)
 
 
-# ttest with Bayse factor
-alternative = "less" if f_min < 20 else "greater"
-tt_frontal = pg.ttest(dreamful_frontal, dreamless_frontal, paired=False, alternative=alternative)
-tt_posterior = pg.ttest(dreamful_posterior, dreamless_posterior, paired=False, alternative=alternative)
-
-
-# correction of p-values based on the Holm's method
-pvals = [tt_frontal["p-val"].iloc[0],tt_posterior["p-val"].iloc[0]]
-reject, pvals_holm, _, _ = multipletests(pvals, alpha=0.05, method="holm")
-
-
-#### Plot
-def get_asterisk(p):
-    if p < 0.001:
-        return '***'
-    elif p < 0.01:
-        return '**'
-    elif p < 0.05:
-        return '*'
-    else:
-        return ''
-    
+# =============================================================================
+# Plot ROI power
+# =============================================================================
 fig, ax = plt.subplots(figsize=(6, 5))
 
-# jittered x position
 x1 = np.random.normal(loc=0.9, scale=0.03, size=len(dreamful_frontal))
 x2 = np.random.normal(loc=1.1, scale=0.03, size=len(dreamless_frontal))
-x3 = np.random.normal(loc=1.5, scale=0.03, size=len(dreamful_posterior))
-x4 = np.random.normal(loc=1.7, scale=0.03, size=len(dreamless_posterior))
+x3 = np.random.normal(loc=1.5, scale=0.03, size=len(dreamful_parocc))
+x4 = np.random.normal(loc=1.7, scale=0.03, size=len(dreamless_parocc))
 
-ax.scatter(x1, dreamful_frontal, color='red', alpha=0.7, label='Experience', marker='o', facecolors='none')
-ax.scatter(x2, dreamless_frontal, color='blue', alpha=0.7, label='No Experience', marker='o', facecolors='none')
-ax.scatter(x3, dreamful_posterior, color='red', alpha=0.7, marker='o', facecolors='none')
-ax.scatter(x4, dreamless_posterior, color='blue', alpha=0.7, marker='o', facecolors='none')
+ax.hlines(np.mean(dreamful_frontal), xmin=0.8, xmax=1.0, color='black',linewidth=2)
+ax.hlines(np.mean(dreamless_frontal), xmin=1.0, xmax=1.2, color='black', linewidth=2)
+ax.hlines(np.mean(dreamful_parocc), xmin=1.4, xmax=1.6, color='black', linewidth=2)
+ax.hlines(np.mean(dreamless_parocc), xmin=1.6, xmax=1.8, color='black', linewidth=2)
 
-
-# add horizontal bars for mean values
-ax.hlines(np.mean(dreamful_frontal), xmin=0.8, xmax=1.0, color='red', linewidth=2)
-ax.hlines(np.mean(dreamless_frontal), xmin=1.0, xmax=1.2, color='blue', linewidth=2)
-ax.hlines(np.mean(dreamful_posterior), xmin=1.4, xmax=1.6, color='red', linewidth=2)
-ax.hlines(np.mean(dreamless_posterior), xmin=1.6, xmax=1.8, color='blue', linewidth=2)
+ax.scatter(x1, dreamful_frontal,color='red',  alpha=0.7, label="Experience", marker="o", facecolors="none")
+ax.scatter(x2, dreamless_frontal, color='blue', alpha=0.7, label="No Experience", marker="o", facecolors="none")
+ax.scatter(x3, dreamful_parocc, color='red', alpha=0.7, marker="o", facecolors="none")
+ax.scatter(x4, dreamless_parocc, color='blue', alpha=0.7, marker="o", facecolors="none")
 
 
-y_min_frontal = min(np.min(dreamful_frontal), np.min(dreamless_frontal))
-y_min_posterior = min(np.min(dreamful_posterior), np.min(dreamless_posterior))
+y_min_all = min(
+    np.min(dreamful_frontal),
+    np.min(dreamless_frontal),
+    np.min(dreamful_parocc),
+    np.min(dreamless_parocc),
+)
 
-y_min_all = min(y_min_frontal, y_min_posterior)
-
-y_max_frontal = max(np.max(dreamful_frontal), np.max(dreamless_frontal))
-y_max_posterior = max(np.max(dreamful_posterior), np.max(dreamless_posterior))
-
-
-# to adjust position of asterisks
-y_max_frontal = y_max_frontal+0.0001
-y_max_posterior = y_max_posterior+0.0001
-y_max_all = max(y_max_frontal, y_max_posterior)
+y_max_all = max(
+    np.max(dreamful_frontal),
+    np.max(dreamless_frontal),
+    np.max(dreamful_parocc),
+    np.max(dreamless_parocc),
+)
 
 yrange = y_max_all - y_min_all
+if yrange == 0:
+    yrange = max(abs(y_max_all), 1.0) * 0.1
 
-pos_asterisk = yrange/100
-pos_bracket = yrange/100
-
-if pvals_holm[0] < 0.05:  # frontal
-    ax.plot([0.9, 1.1], [y_max_frontal, y_max_frontal], color='black', linewidth=1.5)
-    ax.plot([0.9, 0.9], [y_max_frontal, y_max_frontal - pos_bracket], color='black', linewidth=1.5)# left bracket
-    ax.plot([1.1, 1.1], [y_max_frontal, y_max_frontal - pos_bracket], color='black', linewidth=1.5)# right bracket
-    ax.text(1.0, y_max_frontal + pos_asterisk/10, get_asterisk(pvals_holm[0]), ha='center', va='bottom', fontsize=16)
-
-if pvals_holm[1] < 0.05:  # parieto-occipital
-    ax.plot([1.5, 1.7], [y_max_posterior, y_max_posterior], color='black', linewidth=1.5)
-    ax.plot([1.5, 1.5], [y_max_posterior, y_max_posterior - pos_bracket], color='black', linewidth=1.5)# left bracket
-    ax.plot([1.7, 1.7], [y_max_posterior, y_max_posterior - pos_bracket], color='black', linewidth=1.5)# right bracket
-    ax.text(1.6, y_max_posterior + pos_asterisk/10, get_asterisk(pvals_holm[1]), ha='center', va='bottom', fontsize=16)
-        
-# set axis
 ax.set_xticks([1.0, 1.6])
-ax.set_xticklabels(['Frontal', 'Posterior'], fontsize=12)
+ax.set_xticklabels(["Frontal", "Posterior"], fontsize=12)
 ax.set_ylabel(f"Mean Source Power ({duration}sec) {invmethod}", fontsize=12)
 ax.set_xlim(0.7, 1.9)
-
-ax.set_ylim(y_min_all-yrange/20, y_max_all+yrange/10) 
-ax.legend(['Experience', 'No experience'], loc='upper left')
+ax.set_ylim(y_min_all - yrange / 20, y_max_all + yrange / 10)
+ax.legend(loc="upper left")
+ax.set_title(f"{f_min}-{f_max} Hz")
 
 plt.tight_layout()
-plt.title(f"{f_min}-{f_max}Hz")
-plt.show()
-path_save = Path.home() / "Data" / "Dream" / "MNE" / "ROI" / figname
+path_save = fig_save_dir / figname
 plt.savefig(path_save, dpi=300)
+plt.show()
 
 
-print(f"{figname}")
-print()
-print("Frontal")
-print(tt_frontal.to_string())
-print()
-print("Posterior")
-print(tt_posterior.to_string())
-print()
-print(pvals_holm)
-
-
-#####　visualize on the brain
-# vertex indeces for left and right hemispheres
-X_vert_lh, X_vert_rh = stc.vertices
-used_vertices = [X_vert_lh, X_vert_rh]
-
-src = mne.read_source_spaces(f"{subjects_dir}/Dream{subject}/bem/Dream{subject}-oct-6-src.fif")
-    
-n_lh = len(src[0]['vertno'])
-lh_vertno = src[0]['vertno']
-rh_vertno = src[1]['vertno']
-used_vertices = [lh_vertno, rh_vertno]
-n_total = n_lh + len(rh_vertno)
-
-# check if numbers of X_full_final are consistent
-print(f"X_full.shape[1] = {X_full.shape[1]}, total vertices = {n_total}")
-if X_full.shape[1] != n_total:
-    used_vertices = [X_vert_lh, X_vert_rh]
-
-# make source estimate of mean power for X_full and X_less
+# =============================================================================
+# Whole-brain mean source-power maps after run-wise reconstruction
+# =============================================================================
 mean_full = X_full_final.mean(axis=0)
 mean_less = X_less_final.mean(axis=0)
+diff_data = mean_full - mean_less
 
-# make source estimate for power difference
-diff_data = X_full_final.mean(axis=0) - X_less_final.mean(axis=0)  # shape: (n_sources,)
+stc_full = mne.SourceEstimate(
+    mean_full[:, np.newaxis],
+    vertices=used_vertices,
+    tmin=0,
+    tstep=1,
+    subject=subject_name,
+)
 
-stc_full = mne.SourceEstimate(mean_full[:, np.newaxis], vertices=used_vertices,tmin=0, tstep=1, subject=f"Dream{subject}")
-stc_less = mne.SourceEstimate(mean_less[:, np.newaxis], vertices=used_vertices,tmin=0, tstep=1, subject=f"Dream{subject}")
+stc_less = mne.SourceEstimate(
+    mean_less[:, np.newaxis],
+    vertices=used_vertices,
+    tmin=0,
+    tstep=1,
+    subject=subject_name,
+)
 
-## visualize PSD differences
-stc_diff = mne.SourceEstimate(diff_data[:, np.newaxis], vertices=used_vertices,tmin=0, tstep=1, subject=f"Dream{subject}")
+stc_diff = mne.SourceEstimate(
+    diff_data[:, np.newaxis],
+    vertices=used_vertices,
+    tmin=0,
+    tstep=1,
+    subject=subject_name,
+)
 
-
-# visualize PDS difference
 brain = stc_diff.plot(
-    subject=f"Dream{subject}",
+    subject=subject_name,
     subjects_dir=subjects_dir,
-    hemi='both',
-    surface='inflated',
+    hemi="both",
+    surface="inflated",
     smoothing_steps=15,
 )
 
 # brain = stc_diff.plot(
-#     subject=f"Dream{subject}",
+#     subject=subject_name,
 #     subjects_dir=subjects_dir,
-#     hemi='rh',
-#     surface='inflated',
+#     hemi="lh",
+#     surface="inflated",
+#     smoothing_steps=15,
+# )
+
+# brain = stc_diff.plot(
+#     subject=subject_name,
+#     subjects_dir=subjects_dir,
+#     hemi="rh",
+#     surface="inflated",
 #     smoothing_steps=15,
 # )
 
 
-# save data after morphing to the template brain
-src_from = inverse_operator_day1["src"]
-morph = mne.compute_source_morph(src=src_from, subject_from=stc_diff.subject, subject_to="fsaverage", subjects_dir=subjects_dir)
+# =============================================================================
+# Save mean ROI power for each epoch as CSV
+# =============================================================================
+df_exp_roi = pd.DataFrame({
+    "Participant": participant,
+    "ExpDay": day_full_final,
+    "Run": run_full_final,
+    "Condition": "experience",
+    "Frontal": dreamful_frontal,
+    "Posterior": dreamful_parocc,
+})
 
+df_noexp_roi = pd.DataFrame({
+    "Participant": participant,
+    "ExpDay": day_less_final,
+    "Run": run_less_final,
+    "Condition": "no-experience",
+    "Frontal": dreamless_frontal,
+    "Posterior": dreamless_parocc,
+})
 
-stc_diff_fsavg = morph.apply(stc_diff)
-stc_full_fsavg = morph.apply(stc_full)
-stc_less_fsavg = morph.apply(stc_less)
+roi_epoch_df = pd.concat(
+    [df_exp_roi, df_noexp_roi],
+    ignore_index=True
+)
 
-stc_diff_fsavg.save(morph_savepath_diff, overwrite=True)
-stc_full_fsavg.save(morph_savepath_full, overwrite=True)
-stc_less_fsavg.save(morph_savepath_less, overwrite=True)
+roi_epoch_df = roi_epoch_df.sort_values(
+    ["ExpDay", "Run", "Condition"]
+).reset_index(drop=True)
+
+roi_epoch_df.insert(
+    0, "CSV_Epoch_ID",
+    np.arange(1, len(roi_epoch_df) + 1)
+)
+
+roi_epoch_df.to_csv(csv_path, index=False)
+
+print()
+print(f"ROI power CSV saved: {csv_path}")
+print(roi_epoch_df.head())
