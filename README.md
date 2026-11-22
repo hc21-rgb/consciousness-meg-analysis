@@ -1,6 +1,6 @@
 # consciousness-meg-analysis
 
-This repository contains the analysis codes and associated data files for:
+This repository contains the analysis code and associated data files for:
 
 **“The neural basis of consciousness during evening naps measured by MEG: a registered report”** (Hemmi et al., 2026).
 
